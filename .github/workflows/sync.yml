@@ -1,54 +1,57 @@
 name: Upstream Sync
-
 permissions:
-  contents: write
-  issues: write
-  actions: write
+  contents: write  # 必须：强制推送权限
+  issues: write    # 必须：自动管理 issue
+  pull-requests: write  # 可选：创建同步 PR
 
 on:
   schedule:
-    - cron: '0 */6 * * *' # every 6 hours
-  workflow_dispatch:
+    - cron: '0 */6 * * *'  # 每6小时自动同步
+  workflow_dispatch:       # 支持手动触发
 
 jobs:
-  sync_latest_from_upstream:
-    name: Sync latest commits from upstream repo
+  sync_from_upstream:
+    name: Sync from upstream (自动同步上游)
     runs-on: ubuntu-latest
-    if: ${{ github.event.repository.fork }}
+    if: github.repository != 'lobehub/lobe-chat'  # 仅 fork 仓库运行
 
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout code (检出代码)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # 获取完整 git 历史
 
-      - name: Clean issue notice
+      - name: Clean previous failures (清理失败通知)
+        if: always()
         uses: actions-cool/issues-helper@v3
         with:
           actions: 'close-issues'
-          labels: '🚨 Sync Fail'
+          labels: 'sync-failed,🚨同步失败'  # 双语标签
 
-      - name: Sync upstream changes
+      - name: Add upstream remote
+        run: git remote add upstream https://github.com/lobehub/lobe-chat.git
+
+      - name: Attempt fast-forward merge (尝试快速合并)
         id: sync
-        uses: aormsby/Fork-Sync-With-Upstream-action@v3.4
-        with:
-          upstream_sync_repo: lobehub/lobe-chat
-          upstream_sync_branch: main
-          target_sync_branch: main
-          target_repo_token: ${{ secrets.GITHUB_TOKEN }} # automatically generated, no need to set
-          test_mode: false
+        run: |
+          git checkout main
+          if git merge --ff-only upstream/main; then
+            git push origin main
+            echo "result=success" >> $GITHUB_OUTPUT
+          else
+            echo "result=failure" >> $GITHUB_OUTPUT
+          fi
 
-      - name: Sync check
+      - name: Force sync if needed (强制同步)
+        if: steps.sync.outputs.result == 'failure'
+        run: git push origin main --force
+
+      - name: Create failure notice (创建失败通知)
         if: failure()
         uses: actions-cool/issues-helper@v3
         with:
           actions: 'create-issue'
-          title: '🚨 同步失败 | Sync Fail'
-          labels: '🚨 Sync Fail'
+          title: '🚨 Sync Failed | 同步失败'
           body: |
-            Due to a change in the workflow file of the [LobeChat][lobechat] upstream repository, GitHub has automatically suspended the scheduled automatic update. You need to manually sync your fork. Please refer to the detailed [Tutorial][tutorial-en-US] for instructions.
-
-            由于 [LobeChat][lobechat] 上游仓库的 workflow 文件变更，导致 GitHub 自动暂停了本次自动更新，你需要手动 Sync Fork 一次，请查看 [详细教程][tutorial-zh-CN]
-
-            ![](https://github-production-user-asset-6210df.s3.amazonaws.com/17870709/273954625-df80c890-0822-4ac2-95e6-c990785cbed5.png)
-
-            [lobechat]: https://github.com/lobehub/lobe-chat
-            [tutorial-zh-CN]: https://github.com/lobehub/lobe-chat/wiki/Upstream-Sync.zh-CN
-            [tutorial-en-US]: https://github.com/lobehub/lobe-chat/wiki/Upstream-Sync
+            **EN**: Automatic sync failed! Please [sync manually](https://docs.github.com/en/pull-requests/collaborating-with-pull-requests/working-with-forks/syncing-a-fork).
+            **中文**: 自动同步失败！请[手动同步](https://docs.github.com/zh/pull-requests/collaborating-with-pull-requests/working-with-forks/syncing-a-fork).
